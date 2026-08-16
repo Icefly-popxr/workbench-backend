@@ -870,6 +870,29 @@ input::placeholder,textarea::placeholder{color:var(--text-dim)}
         <h2>📋 当前池 <span id="stock-count" style="font-size:16px;color:var(--text-dim);font-weight:normal">0</span></h2>
         <div id="stock-list"></div>
       </div>
+
+      <!-- ==== 功能：持仓管理 START ==== -->
+      <div class="card">
+        <h2>📥 持仓管理 · 同花顺导入 & 策略分析</h2>
+        <p class="hint" style="margin-top:0;margin-bottom:8px">
+          ① 粘贴同花顺持仓明细 → ② 点「解析」预览 → ③ 点「跑策略分析」→ ④ 报告自动写回 Obsidian <code>持仓/reports/</code>
+        </p>
+        <textarea id="pos-ths-text" placeholder="同花顺持仓明细（每行：代码 名称 数量 金额）：
+002240 盛新锂能  200  4862.50
+600519 贵州茅台 100 150000.00
+603659 璞泰来    400 13471.60
+…" style="font-size:14px;width:100%;min-height:80px;padding:10px;border:1px solid #ddd;border-radius:8px;font-family:monospace;box-sizing:border-box;margin-bottom:8px"></textarea>
+        <div class="row" style="margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <button class="btn" id="pos-parse-btn" onclick="Positions.parse()" style="flex:1;min-width:120px">📥 解析持仓</button>
+          <button class="btn" id="pos-analyze-btn" onclick="Positions.analyze()" style="flex:1;min-width:120px">🎯 跑策略分析</button>
+          <button class="btn ghost" id="pos-refresh-btn" onclick="Positions.refresh()" style="flex:0;min-width:80px">🔄 刷新</button>
+        </div>
+        <div id="pos-status" style="margin-bottom:8px;font-size:14px;color:var(--text-dim);min-height:20px"></div>
+        <h3 style="margin:8px 0 6px;font-size:15px">📋 当前持仓 <span id="pos-count" style="font-size:13px;color:var(--text-dim);font-weight:normal">0</span></h3>
+        <div id="pos-list" style="max-height:280px;overflow:auto"></div>
+        <div id="pos-analysis" style="margin-top:12px;padding:12px;background:#f7faff;border-radius:8px;font-size:14px;line-height:1.6;display:none"></div>
+      </div>
+      <!-- ==== 功能：持仓管理 END ==== -->
     </section>
     <!-- ==== 功能：股票池 END ==== -->
 
@@ -1999,6 +2022,193 @@ const Store = (() => {
     }
   };
 })();
+
+/* ═══════════════════════════════════════════════════════════
+   Positions · 持仓管理（同花顺导入 + 策略分析）
+   调后端 /api/positions/* 路由（87KB server.py 已实现）
+   ═══════════════════════════════════════════════════════════ */
+const Positions = {
+  /** 拉现有持仓（来自 Obsidian 持仓/current.md）并渲染表格 */
+  refresh() {
+    const status = document.getElementById('pos-status');
+    if (status) status.textContent = '⏳ 加载持仓...';
+    fetch('/api/positions/from_obsidian', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        // 后端返回字段是 rows（兼容两种命名）
+        const positions = d.positions || d.rows || [];
+        if (d.ok && positions.length > 0) {
+          this._render(positions);
+          if (status) status.textContent = '✅ 已从 Obsidian 加载 ' + positions.length + ' 条持仓';
+        } else if (d.ok) {
+          if (status) status.textContent = 'ℹ️ 暂无持仓（可粘贴同花顺文本后点「解析」）';
+        } else {
+          if (status) status.textContent = '❌ 加载失败: ' + (d.msg || JSON.stringify(d));
+        }
+      })
+      .catch(e => { if (status) status.textContent = '❌ 加载失败: ' + e.message; });
+  },
+
+  /** 解析同花顺文本 → 显示预览（不写入 current.md） */
+  parse() {
+    const text = (document.getElementById('pos-ths-text') || {}).value || '';
+    const status = document.getElementById('pos-status');
+    if (!text.trim()) {
+      if (status) status.textContent = '⚠️ 请先粘贴同花顺持仓文本';
+      return;
+    }
+    if (status) status.textContent = '⏳ 解析中...';
+    fetch('/api/positions/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        const positions = d.positions || d.rows || [];
+        if (d.ok && positions.length > 0) {
+          this._render(positions);
+          if (status) status.textContent = '✅ 已解析 ' + positions.length + ' 条持仓（点「跑策略分析」入库）';
+        } else {
+          if (status) status.textContent = '❌ 解析失败: ' + (d.msg || JSON.stringify(d));
+        }
+      })
+      .catch(e => { if (status) status.textContent = '❌ 网络错误: ' + e.message; });
+  },
+
+  /** 跑策略分析 → 后端会写入 current.md + 持仓/reports/*.md */
+  analyze() {
+    const text = (document.getElementById('pos-ths-text') || {}).value || '';
+    const status = document.getElementById('pos-status');
+    const box = document.getElementById('pos-analysis');
+    if (!text.trim()) {
+      if (status) status.textContent = '⚠️ 请先粘贴同花顺持仓文本';
+      return;
+    }
+    if (status) status.textContent = '⏳ 策略分析中（调 LLM 可能 10-30 秒）...';
+    if (box) { box.style.display = 'block'; box.textContent = '🤖 正在调 LLM 跑持仓策略...'; }
+    fetch('/api/positions/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        const positions = d.positions || d.rows || [];
+        if (d.ok) {
+          if (positions.length > 0) this._render(positions);
+          if (status) status.textContent = '✅ 策略完成 · 持仓 ' + positions.length + ' 条 · 报告已写回 Obsidian';
+          if (box && d.analysis) {
+            box.innerHTML = '<b>🎯 策略结论</b><br>' + Util.esc(d.analysis).replace(/\n/g, '<br>');
+            // 显示「导入 Obsidian」按钮（缓存 LLM 结果，用户点保存）
+            if (!document.getElementById('pos-save-btn')) {
+              const btn = document.createElement('button');
+              btn.id = 'pos-save-btn';
+              btn.className = 'btn';
+              btn.style.cssText = 'margin-top:12px';
+              btn.textContent = '📥 导入 Obsidian 报告';
+              btn.onclick = () => Positions.saveReport(positions, d.analysis);
+              box.appendChild(btn);
+            }
+          }
+          setTimeout(() => this.refresh(), 1500);
+        } else {
+          if (status) status.textContent = '❌ 分析失败: ' + (d.msg || JSON.stringify(d));
+          if (box) box.textContent = '❌ 分析失败: ' + (d.msg || '');
+        }
+      })
+      .catch(e => { if (status) status.textContent = '❌ 网络错误: ' + e.message; if (box) box.textContent = '❌ 网络错误: ' + e.message; });
+  },
+
+  /** 渲染持仓表格（A股惯例：涨红跌绿） */
+  /** 把刚跑的分析报告导入 Obsidian（持仓/reports/） */
+  saveReport(positions, analysis) {
+    const status = document.getElementById('pos-status');
+    const btn = document.getElementById('pos-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 导入中...'; }
+    if (status) status.textContent = '⏳ 写入 Obsidian 报告...';
+    fetch('/api/positions/save_report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        analysis: analysis,
+        positions: positions,
+        notes: '',
+      }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          if (status) status.textContent = '✅ 报告已写入: ' + d.filename + '（obsidian:// 打开）';
+          if (btn) {
+            btn.textContent = '✅ 已导入 Obsidian';
+            // 加跳转链接
+            const link = document.createElement('a');
+            link.href = d.url;
+            link.textContent = '  → 打开报告';
+            link.style.cssText = 'margin-left:8px;font-size:13px';
+            btn.parentNode.insertBefore(link, btn.nextSibling);
+          }
+        } else {
+          if (status) status.textContent = '❌ 保存失败: ' + (d.msg || JSON.stringify(d));
+          if (btn) { btn.disabled = false; btn.textContent = '📥 导入 Obsidian 报告（重试）'; }
+        }
+      })
+      .catch(e => {
+        if (status) status.textContent = '❌ 网络错误: ' + e.message;
+        if (btn) { btn.disabled = false; btn.textContent = '📥 导入 Obsidian 报告（重试）'; }
+      });
+  },
+
+  _render(positions) {
+    const list = document.getElementById('pos-list');
+    const count = document.getElementById('pos-count');
+    if (!list) return;
+    if (!positions || positions.length === 0) {
+      list.innerHTML = '<div style="padding:14px;color:var(--text-dim);font-size:14px">📭 暂无持仓</div>';
+      if (count) count.textContent = '0';
+      return;
+    }
+    if (count) count.textContent = positions.length + ' 条';
+    const rows = positions.map(p => {
+      const code = Util.esc(p.code || '');
+      const name = Util.esc(p.name || '');
+      const qty = p.qty || 0;
+      const cost = (p.cost || 0).toFixed(2);
+      const price = (p.price || p.live_price || 0).toFixed(2);
+      const pnl = p.pnl_pct != null ? p.pnl_pct : (cost > 0 ? ((price - cost) / cost * 100) : 0);
+      const pnlColor = pnl > 0 ? '#dc2626' : (pnl < 0 ? '#16a34a' : '#666');
+      const pnlSign = pnl > 0 ? '+' : '';
+      const pool = Util.esc(p.pool || '不在池子');
+      const poolColor = pool === '不在池子' ? '#9ca3af' : 'var(--accent)';
+      return '<tr style="border-bottom:1px solid #eee">' +
+        '<td style="padding:6px 8px;font-family:monospace">' + code + '</td>' +
+        '<td style="padding:6px 8px">' + name + '</td>' +
+        '<td style="padding:6px 8px;text-align:right">' + qty + '</td>' +
+        '<td style="padding:6px 8px;text-align:right;font-family:monospace">' + cost + '</td>' +
+        '<td style="padding:6px 8px;text-align:right;font-family:monospace">' + price + '</td>' +
+        '<td style="padding:6px 8px;text-align:right;color:' + pnlColor + ';font-weight:600">' + pnlSign + pnl.toFixed(2) + '%</td>' +
+        '<td style="padding:6px 8px;font-size:12px;color:' + poolColor + '">' + pool + '</td>' +
+        '</tr>';
+    }).join('');
+    list.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
+      '<thead style="background:#f7faff;font-weight:600"><tr>' +
+        '<th style="padding:8px;text-align:left">代码</th>' +
+        '<th style="padding:8px;text-align:left">名称</th>' +
+        '<th style="padding:8px;text-align:right">数量</th>' +
+        '<th style="padding:8px;text-align:right">成本</th>' +
+        '<th style="padding:8px;text-align:right">现价</th>' +
+        '<th style="padding:8px;text-align:right">盈亏%</th>' +
+        '<th style="padding:8px;text-align:left">池子</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+  },
+};
+
+// 页面加载后自动拉一次持仓
+document.addEventListener('DOMContentLoaded', () => {
+  if (typeof Positions !== 'undefined') Positions.refresh();
+});
 
 
 /* ═══════════════════════════════════════════════════════════

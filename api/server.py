@@ -716,7 +716,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_file(Path(__file__).parent.parent / "test_backup.html", "text/html")
 
             elif path == "/review.html" or path == "/review":
-                self._send_file(Path(__file__).parent.parent / "review.html", "text/html")
+                # review.html 独立文件存在时返回该文件，否则降级到内嵌在 index.html 的 page-review
+                review_path = Path(__file__).parent.parent / "review.html"
+                if review_path.exists():
+                    self._send_file(review_path, "text/html")
+                else:
+                    # 降级：重定向到 index.html 的 page-review 锚点（iframe 嵌入可用）
+                    self.send_response(302)
+                    self.send_header("Location", "/index.html#page-review")
+                    self.end_headers()
 
             elif path == "/manifest.json":
                 self._send_file(Path(__file__).parent.parent / "manifest.json", "application/json")
@@ -1337,6 +1345,47 @@ class Handler(BaseHTTPRequestHandler):
                     f"- {p['code']} {p['name']} ({p['pnl_pct']:+.1f}%, 持仓{p['hold_days']}天)"
                     for p in no_pool
                 ) or '（无）'
+
+                # 7.5) 读板块池（按时段优先级：收盘 > 午盘 > 盘前 > 周报）
+                sector_pool_block = '（暂无板块池数据）'
+                try:
+                    from pathlib import Path as _Path
+                    sp_dir = _Path('/mnt/d/Obsidian Vault/🤖 草帽团/04_成长日记/🧭投研复盘/板块池')
+                    if sp_dir.exists():
+                        # 按时段优先级找最新文件
+                        selected = None
+                        for slot in ['收盘', '午盘', '盘前', '周报']:
+                            candidates_sp = sorted(sp_dir.glob(f'板块池-*-{slot}.md'), key=lambda p: p.stat().st_mtime, reverse=True)
+                            if candidates_sp:
+                                selected = candidates_sp[0]
+                                break
+                        if selected:
+                            text = selected.read_text(encoding='utf-8', errors='replace')
+                            # 解析时段 frontmatter
+                            slot_name = '?'
+                            import re as _re
+                            fm_match = _re.search(r'^时段:\s*(\S+)', text, _re.MULTILINE)
+                            if fm_match:
+                                slot_name = fm_match.group(1)
+                            # 解析板块等级表（| 等级 | 板块 | ... 开头）
+                            sp_lines = []
+                            in_table = False
+                            for line in text.split('\n'):
+                                if '| 等级' in line and '板块' in line:
+                                    in_table = True
+                                    continue
+                                if in_table:
+                                    if '|---' in line: continue
+                                    if not line.strip().startswith('|'): break
+                                    cells = [c.strip() for c in line.split('|')[1:-1]]
+                                    if len(cells) >= 10:
+                                        grade, sector, quant, human, total, color, chg, vol, leader, trigger = cells[:10]
+                                        sp_lines.append(f"- {grade} **{sector}** | 量化{quant} 人工{human} 综合{total} | {color} 当日{chg} | 龙头「{leader}」 触发「{trigger}」")
+                            if sp_lines:
+                                sector_pool_block = f"（来源：板块池 {selected.name}，时段={slot_name}，共 {len(sp_lines)} 个板块）\n" + '\n'.join(sp_lines)
+                except Exception as e:
+                    sector_pool_block = f'（板块池读取失败: {e}）'
+
                 # 大盘环境
                 market_lines = '\n'.join(
                     f"- {m['name']}: {m['price']:.2f} ({m['today_pct']:+.2f}%)"
@@ -1347,6 +1396,9 @@ class Handler(BaseHTTPRequestHandler):
 
 ## 大盘环境（今日实时）
 {market_lines}
+
+## 板块池等级（核心/活跃/观察板块，含量化+人工双评分）
+{sector_pool_block}
 
 ## 用户当前持仓（含实时行情 + 池子档案 + 历史信号）
 {positions_block}
@@ -1362,6 +1414,7 @@ class Handler(BaseHTTPRequestHandler):
 ### A. 组合层（看大盘 + 整体仓位）
 1. 大盘是涨/跌/震荡 → 决定加仓节奏（涨不追高、跌不抄底、震荡做 T）
 2. 整体浮亏率 / 现金比例 → 决定止损宽松度
+3. **板块池等级**：核心板块里的持仓 = 强研究背书；观察板块里的持仓 = 谨慎持有；冷板块里的持仓 = 考虑止损换出
 
 ### B. 单只层（看实时行情 + 历史信号 + 池子档案）
 1. **实时行情**：当日 >+5% 或 <-5% = 异常波动，需要警惕
