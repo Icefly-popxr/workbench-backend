@@ -1,0 +1,23 @@
+[Unit]
+Description=Personal Dashboard Backend (8765) — star user session
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=star
+Group=star
+Slice=user.slice
+WorkingDirectory=/mnt/d/IceFly/Dashboard/api
+ExecStart=/usr/bin/python3 /mnt/d/IceFly/Dashboard/api/server.py
+Restart=always
+RestartSec=3
+Environment="HOME=/home/star"
+Environment="USER=star"
+Environment="LOGNAME=star"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

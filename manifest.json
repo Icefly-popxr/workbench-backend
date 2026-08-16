@@ -1,0 +1,19 @@
+{
+  "name": "然哥的工作台",
+  "short_name": "然哥",
+  "description": "炒股 · 学习 · 自媒体 · 每日打卡 一体化手机工作台",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#dde7f4",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

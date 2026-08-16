@@ -1,0 +1,32 @@
+# 排除二进制大文件(避免 git 仓库过大)
+api/data/audio/
+api/data/tts_cache/
+preview-assets/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 临时/备份文件
+*.bak
+*.bak-*
+*.bak_*
+*.bak.*
+*.tmp
+*.fixed
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 一次性 HTML(调试用,不入版本)
+real-render.html
+test_backup.html
+kpi-v4-preview.html
+风格预览.html
+6charts-*.html
+index.html.bak.*
+index.html.fixed
+screenshots-viewer.html
+workbench_bento_demo.html
