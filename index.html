@@ -34,6 +34,8 @@
   <!-- Markdown 渲染（marked + DOMPurify）2026-08-05 -->
   <script src="marked.min.js"></script>
   <script src="purify.min.js"></script>
+  <!-- Chart.js v4（图表库，CDN 加载） -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 
 <style>
@@ -819,6 +821,14 @@ input::placeholder,textarea::placeholder{color:var(--text-dim)}
     <section class="page" id="page-stock">
       <div class="page-title">📊 股票池</div>
 
+      <!-- 子标签页：持仓管理 vs 数据统计 -->
+      <div class="kb-tabs" style="margin-bottom:12px">
+        <button class="kb-tab on" data-stock-tab="pool" onclick="StockTab.switchTo('pool')">📋 股票池 + 持仓</button>
+        <button class="kb-tab" data-stock-tab="stats" onclick="StockTab.switchTo('stats')">📊 数据统计</button>
+      </div>
+
+      <!-- 子标签 1: 股票池 + 持仓管理 -->
+      <div class="stock-tab-panel" id="stock-tab-pool">
       <div class="card">
         <h2>➕ 加入股票</h2>
         <div class="row" style="margin-bottom:8px">
@@ -893,6 +903,52 @@ input::placeholder,textarea::placeholder{color:var(--text-dim)}
         <div id="pos-analysis" style="margin-top:12px;padding:12px;background:#f7faff;border-radius:8px;font-size:14px;line-height:1.6;display:none"></div>
       </div>
       <!-- ==== 功能：持仓管理 END ==== -->
+      </div><!-- /stock-tab-pool -->
+
+      <!-- 子标签 2: 数据统计 -->
+      <div class="stock-tab-panel" id="stock-tab-stats" style="display:none">
+        <div class="card">
+          <h2>📈 关键指标（KPI）</h2>
+          <div id="stats-kpi" class="kpi-row"><div class="kpi-card"><div class="kpi-label">加载中...</div></div></div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <div class="card-title">🥧 持仓板块占比（按 sector 聚合）</div>
+            <div class="chart-wrap"><canvas id="stats-sector-pie"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">📊 交易盈亏分布（%）</div>
+            <div class="chart-wrap"><canvas id="stats-pnl-bar"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">📈 持有天数 vs 盈亏（散点）</div>
+            <div class="chart-wrap"><canvas id="stats-holddays-scatter"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">⭐ 信号强度分布（1-5★）</div>
+            <div class="chart-wrap"><canvas id="stats-strength-bar"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">🎯 信号方向（多/空/中性）</div>
+            <div class="chart-wrap"><canvas id="stats-direction-pie"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">🔥 板块曝光（top sectors · signals+trades 合并）</div>
+            <div class="chart-wrap"><canvas id="stats-sector-bar"></canvas></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>📋 最近 5 条信号</h2>
+          <div id="stats-recent-signals" style="max-height:240px;overflow:auto"></div>
+        </div>
+        <div class="card">
+          <h2>📋 最近 5 条交易</h2>
+          <div id="stats-recent-trades" style="max-height:240px;overflow:auto"></div>
+        </div>
+      </div><!-- /stock-tab-stats -->
+
     </section>
     <!-- ==== 功能：股票池 END ==== -->
 
@@ -2202,6 +2258,254 @@ const Positions = {
         '<th style="padding:8px;text-align:left">池子</th>' +
       '</tr></thead>' +
       '<tbody>' + rows + '</tbody></table>';
+  },
+};
+
+/* ═══════════════════════════════════════════════════════════
+   StockTab · 股票池页内子标签切换
+   ═══════════════════════════════════════════════════════════ */
+const StockTab = {
+  switchTo(name) {
+    document.querySelectorAll('[data-stock-tab]').forEach(b => {
+      b.classList.toggle('on', b.getAttribute('data-stock-tab') === name);
+    });
+    const pool = document.getElementById('stock-tab-pool');
+    const stats = document.getElementById('stock-tab-stats');
+    if (name === 'stats') {
+      if (pool) pool.style.display = 'none';
+      if (stats) stats.style.display = '';
+      if (!this._statsLoaded) {
+        Stats.refresh();
+        this._statsLoaded = true;
+      }
+    } else {
+      if (pool) pool.style.display = '';
+      if (stats) stats.style.display = 'none';
+    }
+  },
+};
+
+/* ═══════════════════════════════════════════════════════════
+   Stats · 数据统计（signals + trades + positions · 6 图表 + KPI）
+   依赖 Chart.js v4（head 已 CDN）
+   ═══════════════════════════════════════════════════════════ */
+const Stats = {
+  _signals: [],
+  _trades: [],
+  _positions: [],
+  _charts: {},
+
+  refresh() {
+    Promise.all([
+      fetch('/api/review/signals').then(r => r.json()).catch(() => ({ ok: false, signals: [] })),
+      fetch('/api/review/trades').then(r => r.json()).catch(() => ({ ok: false, trades: [] })),
+      fetch('/api/positions/from_obsidian', { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false, rows: [] })),
+    ]).then(([sigRes, trdRes, posRes]) => {
+      this._signals = sigRes.signals || [];
+      this._trades = trdRes.trades || [];
+      this._positions = posRes.rows || posRes.positions || [];
+      this._renderKPI();
+      this._renderSectorPie();
+      this._renderPnlBar();
+      this._renderHolddaysScatter();
+      this._renderStrengthBar();
+      this._renderDirectionPie();
+      this._renderSectorBar();
+      this._renderRecentList();
+    }).catch(e => {
+      const k = document.getElementById('stats-kpi');
+      if (k) k.innerHTML = '<div class="kpi-card"><div class="kpi-label">❌ 加载失败: ' + Util.esc(e.message) + '</div></div>';
+    });
+  },
+
+  _destroy(id) {
+    if (this._charts[id]) {
+      try { this._charts[id].destroy(); } catch (e) {}
+      this._charts[id] = null;
+    }
+  },
+
+  _renderKPI() {
+    const signals = this._signals;
+    const trades = this._trades;
+    const wins = trades.filter(t => (t.pnl_pct || 0) > 0).length;
+    const winRate = trades.length ? Math.round(wins / trades.length * 100) : 0;
+    const totalPnl = trades.reduce((s, t) => s + (t.pnl_pct || 0), 0);
+    const totalPnlColor = totalPnl >= 0 ? '#dc2626' : '#16a34a';
+    const totalPnlSign = totalPnl >= 0 ? '+' : '';
+    const html = [
+      { label: '信号数', value: signals.length, sub: signals.length ? signals.filter(s => s.direction === '多').length + ' 多 / ' + signals.filter(s => s.direction === '空').length + ' 空' : '暂无' },
+      { label: '交易数', value: trades.length, sub: trades.length ? wins + ' 盈 ' + (trades.length - wins) + ' 亏' : '暂无' },
+      { label: '胜率', value: winRate + '%', sub: trades.length ? wins + '/' + trades.length : '暂无交易' },
+      { label: '总盈亏', value: totalPnlSign + totalPnl.toFixed(1) + '%', sub: trades.length ? '平均 ' + (totalPnl / trades.length).toFixed(2) + '%' : '—', color: totalPnlColor },
+    ].map(k => `
+      <div class="kpi-card">
+        <div class="kpi-label">${Util.esc(k.label)}</div>
+        <div class="kpi-big" style="color:${k.color || '#1a202c'}">${k.value}</div>
+        <div class="kpi-sub">${Util.esc(k.sub)}</div>
+      </div>
+    `).join('');
+    const el = document.getElementById('stats-kpi');
+    if (el) el.innerHTML = html;
+  },
+
+  _renderSectorPie() {
+    const cv = document.getElementById('stats-sector-pie');
+    if (!cv || typeof Chart === 'undefined') return;
+    const map = {};
+    this._positions.forEach(p => {
+      const sec = p.pool || '不在池子';
+      map[sec] = (map[sec] || 0) + (p.value || 0);
+    });
+    if (!Object.keys(map).length) return;
+    const labels = Object.keys(map);
+    const values = labels.map(l => map[l]);
+    const colors = ['#1d4ed8', '#dc2626', '#16a34a', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+    this._destroy('sector-pie');
+    this._charts['sector-pie'] = new Chart(cv.getContext('2d'), {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: values, backgroundColor: labels.map((_, i) => colors[i % colors.length]) }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } } },
+    });
+  },
+
+  _renderPnlBar() {
+    const cv = document.getElementById('stats-pnl-bar');
+    if (!cv || typeof Chart === 'undefined') return;
+    const buckets = { '<-10%': 0, '-10~-5%': 0, '-5~0%': 0, '0~5%': 0, '5~10%': 0, '>10%': 0 };
+    this._trades.forEach(t => {
+      const p = t.pnl_pct || 0;
+      if (p < -10) buckets['<-10%']++;
+      else if (p < -5) buckets['-10~-5%']++;
+      else if (p < 0) buckets['-5~0%']++;
+      else if (p < 5) buckets['0~5%']++;
+      else if (p < 10) buckets['5~10%']++;
+      else buckets['>10%']++;
+    });
+    const labels = Object.keys(buckets);
+    const data = labels.map(l => buckets[l]);
+    this._destroy('pnl-bar');
+    this._charts['pnl-bar'] = new Chart(cv.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '交易数', data, backgroundColor: data.map((_, i) => i < 3 ? '#16a34a' : (i === 3 ? '#9ca3af' : '#dc2626')) }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } },
+    });
+  },
+
+  _renderHolddaysScatter() {
+    const cv = document.getElementById('stats-holddays-scatter');
+    if (!cv || typeof Chart === 'undefined') return;
+    const pts = this._trades.map(t => ({ x: t.hold_days || 0, y: t.pnl_pct || 0, name: t.name || t.code || '?' }));
+    this._destroy('holddays-scatter');
+    this._charts['holddays-scatter'] = new Chart(cv.getContext('2d'), {
+      type: 'scatter',
+      data: { datasets: [{ label: '交易', data: pts, backgroundColor: pts.map(p => p.y >= 0 ? '#dc2626' : '#16a34a') }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => ctx.raw.name + ': ' + ctx.raw.hold_days + '天 / ' + ctx.raw.pnl_pct.toFixed(2) + '%' } } }, scales: { x: { title: { display: true, text: '持有天数' } }, y: { title: { display: true, text: '盈亏%' } } } },
+    });
+  },
+
+  _renderStrengthBar() {
+    const cv = document.getElementById('stats-strength-bar');
+    if (!cv || typeof Chart === 'undefined') return;
+    const buckets = { '1★': 0, '2★': 0, '3★': 0, '4★': 0, '5★': 0 };
+    this._signals.forEach(s => {
+      const k = (s.strength || 0) + '★';
+      if (buckets[k] !== undefined) buckets[k]++;
+    });
+    const labels = Object.keys(buckets);
+    const data = labels.map(l => buckets[l]);
+    this._destroy('strength-bar');
+    this._charts['strength-bar'] = new Chart(cv.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '信号数', data, backgroundColor: '#1d4ed8' }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } },
+    });
+  },
+
+  _renderDirectionPie() {
+    const cv = document.getElementById('stats-direction-pie');
+    if (!cv || typeof Chart === 'undefined') return;
+    const map = { '多': 0, '空': 0, '中性': 0 };
+    this._signals.forEach(s => {
+      const d = s.direction || '中性';
+      if (map[d] !== undefined) map[d]++; else map['中性']++;
+    });
+    const labels = Object.keys(map);
+    const values = labels.map(l => map[l]);
+    if (!values.reduce((a, b) => a + b, 0)) return;
+    this._destroy('direction-pie');
+    this._charts['direction-pie'] = new Chart(cv.getContext('2d'), {
+      type: 'pie',
+      data: { labels, datasets: [{ data: values, backgroundColor: ['#dc2626', '#16a34a', '#9ca3af'] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } } },
+    });
+  },
+
+  _renderSectorBar() {
+    const cv = document.getElementById('stats-sector-bar');
+    if (!cv || typeof Chart === 'undefined') return;
+    const map = {};
+    this._signals.forEach(s => { const k = s.sector || '未分类'; map[k] = (map[k] || 0) + 1; });
+    this._trades.forEach(t => { const k = t.sector || '未分类'; map[k] = (map[k] || 0) + 1; });
+    const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    if (!entries.length) return;
+    this._destroy('sector-bar');
+    this._charts['sector-bar'] = new Chart(cv.getContext('2d'), {
+      type: 'bar',
+      data: { labels: entries.map(e => e[0]), datasets: [{ label: '提及数', data: entries.map(e => e[1]), backgroundColor: '#8b5cf6' }] },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } } },
+    });
+  },
+
+  _renderRecentList() {
+    const sigs = this._signals.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
+    const trds = this._trades.slice().sort((a, b) => (b.exec_date || '').localeCompare(a.exec_date || '')).slice(0, 5);
+
+    const sigHtml = sigs.length ? `
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="background:#f7faff"><tr>
+          <th style="padding:6px;text-align:left">日期</th>
+          <th style="padding:6px;text-align:left">板块</th>
+          <th style="padding:6px;text-align:left">方向</th>
+          <th style="padding:6px;text-align:left">强度</th>
+          <th style="padding:6px;text-align:left">类型</th>
+          <th style="padding:6px;text-align:left">备注</th>
+        </tr></thead>
+        <tbody>
+          ${sigs.map(s => {
+            const dirColor = s.direction === '多' ? '#dc2626' : s.direction === '空' ? '#16a34a' : '#666';
+            return '<tr style="border-bottom:1px solid #eee"><td style="padding:6px">' + Util.esc(s.date || '?') + '</td><td style="padding:6px">' + Util.esc(s.sector || '-') + '</td><td style="padding:6px;color:' + dirColor + ';font-weight:600">' + Util.esc(s.direction || '?') + '</td><td style="padding:6px">' + '★'.repeat(s.strength || 0) + '☆'.repeat(5 - (s.strength || 0)) + '</td><td style="padding:6px">' + Util.esc(s.signal_type || '-') + '</td><td style="padding:6px;color:#666">' + Util.esc((s.notes || '').slice(0, 40)) + '</td></tr>';
+          }).join('')}
+        </tbody>
+      </table>
+    ` : '<div style="padding:12px;color:#9ca3af">📭 暂无信号记录</div>';
+
+    const trdHtml = trds.length ? `
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="background:#f7faff"><tr>
+          <th style="padding:6px;text-align:left">日期</th>
+          <th style="padding:6px;text-align:left">代码</th>
+          <th style="padding:6px;text-align:left">名称</th>
+          <th style="padding:6px;text-align:left">板块</th>
+          <th style="padding:6px;text-align:right">盈亏%</th>
+          <th style="padding:6px;text-align:right">持股天</th>
+          <th style="padding:6px;text-align:left">理由</th>
+        </tr></thead>
+        <tbody>
+          ${trds.map(t => {
+            const pnl = t.pnl_pct || 0;
+            const pnlColor = pnl > 0 ? '#dc2626' : (pnl < 0 ? '#16a34a' : '#666');
+            const pnlSign = pnl > 0 ? '+' : '';
+            return '<tr style="border-bottom:1px solid #eee"><td style="padding:6px">' + Util.esc(t.exec_date || '?') + '</td><td style="padding:6px;font-family:monospace">' + Util.esc(t.code || '-') + '</td><td style="padding:6px">' + Util.esc(t.name || '-') + '</td><td style="padding:6px">' + Util.esc(t.sector || '-') + '</td><td style="padding:6px;text-align:right;color:' + pnlColor + ';font-weight:600">' + pnlSign + pnl.toFixed(2) + '%</td><td style="padding:6px;text-align:right">' + (t.hold_days || '-') + '</td><td style="padding:6px;color:#666">' + Util.esc(t.exit_reason || '-') + '</td></tr>';
+          }).join('')}
+        </tbody>
+      </table>
+    ` : '<div style="padding:12px;color:#9ca3af">📭 暂无交易记录</div>';
+
+    const s = document.getElementById('stats-recent-signals');
+    const t = document.getElementById('stats-recent-trades');
+    if (s) s.innerHTML = sigHtml;
+    if (t) t.innerHTML = trdHtml;
   },
 };
 
