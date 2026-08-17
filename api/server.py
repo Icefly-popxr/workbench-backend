@@ -975,7 +975,10 @@ class Handler(BaseHTTPRequestHandler):
                 txt = current_md.read_text(encoding="utf-8")
                 rows: list = []
                 if txt.startswith("---\n"):
-                    end = txt.index("\n---\n", 4)
+                    # 容错：兼容无 trailing newline 的 current.md
+                    end = txt.find("\n---\n", 4)
+                    if end < 0:
+                        end = txt.find("\n---", 4)
                     if end > 0:
                         in_positions = False
                         cur: dict = {}
@@ -1589,9 +1592,13 @@ class Handler(BaseHTTPRequestHandler):
                     f"total_pnl: {current_total_pnl:.2f}\n"
                     f"positions:\n"
                     + '\n'.join(positions_yaml)
-                    + "\n---\n"
+                    + "\n---\n"  # 末尾必须 \n---\n，让 Obsidian parseCurrentMd 找得到
                 )
                 current_md_path.write_text(current_content, encoding='utf-8')
+                # 兜底：确保文件末尾有 trailing newline（Obsidian parseCurrentMd 依赖这个）
+                with open(current_md_path, 'ab') as _f:
+                    if not current_content.endswith('\n\n'):
+                        _f.write(b'\n')
 
                 self._send_json({
                     'ok': True,
