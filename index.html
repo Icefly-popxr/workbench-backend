@@ -517,6 +517,65 @@ input::placeholder,textarea::placeholder{color:var(--text-dim)}
   font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;
 }
 .toast.on{opacity:1}
+/* ==== Markdown 报告样式（持仓策略分析 · LLM 输出）==== */
+  .stats-md-report table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .stats-md-report th,
+  .stats-md-report td {
+    border: 1px solid #e5e7eb;
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .stats-md-report th {
+    background: #f7faff;
+    font-weight: 600;
+    color: #1a202c;
+  }
+  .stats-md-report td {
+    color: #2d3748;
+  }
+  .stats-md-report h1,
+  .stats-md-report h2,
+  .stats-md-report h3 {
+    margin: 16px 0 8px;
+    color: #1a202c;
+    font-weight: 600;
+  }
+  .stats-md-report h2 { font-size: 18px; border-bottom: 2px solid #1d4ed8; padding-bottom: 4px; }
+  .stats-md-report h3 { font-size: 15px; color: #1d4ed8; }
+  .stats-md-report p {
+    margin: 8px 0;
+    line-height: 1.6;
+  }
+  .stats-md-report strong { color: #1a202c; }
+  .stats-md-report ul,
+  .stats-md-report ol { margin: 8px 0 8px 20px; }
+  .stats-md-report li { margin: 4px 0; line-height: 1.5; }
+  .stats-md-report code {
+    background: #f3f4f6;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  .stats-md-report hr {
+    border: 0;
+    border-top: 1px solid #e5e7eb;
+    margin: 16px 0;
+  }
+  .stats-md-report pre {
+    background: #f3f4f6;
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+  }
+  /* ==== END Markdown 报告样式 ==== */
 </style>
 </head>
 <body>
@@ -1921,6 +1980,65 @@ input::placeholder,textarea::placeholder{color:var(--text-dim)}
     padding-top: 12px;
   }
 }
+/* ==== Markdown 报告样式（持仓策略分析 · LLM 输出）==== */
+  .stats-md-report table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .stats-md-report th,
+  .stats-md-report td {
+    border: 1px solid #e5e7eb;
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .stats-md-report th {
+    background: #f7faff;
+    font-weight: 600;
+    color: #1a202c;
+  }
+  .stats-md-report td {
+    color: #2d3748;
+  }
+  .stats-md-report h1,
+  .stats-md-report h2,
+  .stats-md-report h3 {
+    margin: 16px 0 8px;
+    color: #1a202c;
+    font-weight: 600;
+  }
+  .stats-md-report h2 { font-size: 18px; border-bottom: 2px solid #1d4ed8; padding-bottom: 4px; }
+  .stats-md-report h3 { font-size: 15px; color: #1d4ed8; }
+  .stats-md-report p {
+    margin: 8px 0;
+    line-height: 1.6;
+  }
+  .stats-md-report strong { color: #1a202c; }
+  .stats-md-report ul,
+  .stats-md-report ol { margin: 8px 0 8px 20px; }
+  .stats-md-report li { margin: 4px 0; line-height: 1.5; }
+  .stats-md-report code {
+    background: #f3f4f6;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  .stats-md-report hr {
+    border: 0;
+    border-top: 1px solid #e5e7eb;
+    margin: 16px 0;
+  }
+  .stats-md-report pre {
+    background: #f3f4f6;
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+  }
+  /* ==== END Markdown 报告样式 ==== */
 </style>
 
 <div class="toast" id="toast"></div>
@@ -2155,7 +2273,15 @@ const Positions = {
           if (positions.length > 0) this._render(positions);
           if (status) status.textContent = '✅ 策略完成 · 持仓 ' + positions.length + ' 条 · 报告已写回 Obsidian';
           if (box && d.analysis) {
-            box.innerHTML = '<b>🎯 策略结论</b><br>' + Util.esc(d.analysis).replace(/\n/g, '<br>');
+            // 用 marked + DOMPurify 渲染 markdown（表格/标题/列表对齐）
+            let analysisHtml;
+            try {
+              const raw = marked.parse(String(d.analysis), { gfm: true, breaks: true });
+              analysisHtml = DOMPurify.sanitize(raw, { ADD_ATTR: ['target'] });
+            } catch (e) {
+              analysisHtml = Util.esc(d.analysis).replace(/\n/g, '<br>');
+            }
+            box.innerHTML = '<div class="stats-md-report">' + analysisHtml + '</div>';
             // 显示「导入 Obsidian」按钮（缓存 LLM 结果，用户点保存）
             if (!document.getElementById('pos-save-btn')) {
               const btn = document.createElement('button');
@@ -2170,7 +2296,7 @@ const Positions = {
           setTimeout(() => this.refresh(), 1500);
         } else {
           if (status) status.textContent = '❌ 分析失败: ' + (d.msg || JSON.stringify(d));
-          if (box) box.textContent = '❌ 分析失败: ' + (d.msg || '');
+          if (box) box.innerHTML = '<div style="color:#dc2626">❌ 分析失败: ' + Util.esc(d.msg || JSON.stringify(d)) + '</div>';
         }
       })
       .catch(e => { if (status) status.textContent = '❌ 网络错误: ' + e.message; if (box) box.textContent = '❌ 网络错误: ' + e.message; });
