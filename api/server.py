@@ -1563,11 +1563,42 @@ class Handler(BaseHTTPRequestHandler):
                 # 写文件
                 filepath = target_dir / filename
                 filepath.write_text(content, encoding='utf-8')
+
+                # 同步 current.md（持仓主表）— Obsidian 工作台 📦 持仓追踪读这个
+                # 字段对齐 parseCurrentMd 解析的 schema
+                current_md_path = Path('/mnt/d/Obsidian Vault/🤖 草帽团/04_成长日记/🧭投研复盘/持仓/current.md')
+                current_total_value = sum(p.get('value', 0) for p in positions)
+                current_total_cost = sum(p.get('cost', 0) * p.get('qty', 0) for p in positions)
+                current_total_pnl = current_total_value - current_total_cost
+                positions_yaml = []
+                for p in positions:
+                    positions_yaml.append(
+                        f"  - code: {p.get('code','')}\n"
+                        f"    name: {p.get('name','')}\n"
+                        f"    qty: {p.get('qty',0)}\n"
+                        f"    cost: {p.get('cost',0)}\n"
+                        f"    price: {p.get('live_price', p.get('price',0))}\n"
+                        f"    live_price: {p.get('live_price', p.get('price',0))}\n"
+                        f"    today_pct: {p.get('today_pct',0)}\n"
+                        f"    pool: {p.get('pool','不在池子')}"
+                    )
+                current_content = (
+                    f"---\n"
+                    f"updated_at: {now.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"total_value: {current_total_value:.2f}\n"
+                    f"total_pnl: {current_total_pnl:.2f}\n"
+                    f"positions:\n"
+                    + '\n'.join(positions_yaml)
+                    + "\n---\n"
+                )
+                current_md_path.write_text(current_content, encoding='utf-8')
+
                 self._send_json({
                     'ok': True,
                     'path': str(filepath).replace('\\', '/'),
                     'filename': filename,
                     'url': 'obsidian://open?path=' + str(filepath).replace('\\', '/'),
+                    'current_md_updated': True,
                 })
             except Exception as e:
                 import traceback
